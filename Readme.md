@@ -1,172 +1,145 @@
-# Platformer Multijoueur - Jeu Réseau Local
+# Platformer Multiplayer Game
 
-Un jeu platformer 2D multijoueur en Python avec Pygame, supportant l'architecture client-serveur en réseau local.
+This project is a local multiplayer 2D platformer built with Python and Pygame.
+It uses a client-server network model so multiple players can connect over a local network.
 
-## Fonctionnalités
+## Features
 
-✨ **Multijoueur Réseau Local**
-- Architecture client-serveur TCP
-- Jusqu'à 4 joueurs simultanés
-- Synchronisation en temps réel
+- Local multiplayer with TCP client-server architecture
+- Up to 4 players
+- Player movement, jumping, and shooting
+- Health system with body/head damage
+- Color-based player selection in the lobby
+- Simple lobby and game state synchronization
+- Configurable settings in `constants.py`
 
-🎮 **Gameplay**
-- Platformer 2D avec physique réaliste
-- Système de tir avec visée à la souris
-- Système de santé avec zones de dégât différentiées:
-  - **Corps**: 4 tirs pour éliminer un joueur
-  - **Tête**: 1 tir (zone délimitée supérieure)
-- Cooldown de tir pour équilibrer le jeu
-- Plateformes interactives
+## Requirements
 
-👥 **Système de Lobby**
-- Chaque joueur choisit un pseudo unique
-- 6 couleurs disponibles (pas de doublons)
-- Interface de sélection facile
+- Python 3.8 or newer
+- Pygame 2.0 or newer
 
-## Installation
+## Install Dependencies
 
-### Prérequis
-- Python 3.8+
-- Pygame 2.0+
-
-### Installation des dépendances
 ```bash
 pip install -r requirements.txt
 ```
 
-## Démarrage du Jeu
+## Run the Game
 
 ```bash
 python main.py
 ```
 
-### Menu Principal
-1. **Créer un serveur (HOST)**: Lancez le jeu en mode serveur et attendez que les clients se connectent
-2. **Rejoindre un serveur (CLIENT)**: Connectez-vous à un serveur existant
+## How to Play
 
-## Contrôles de Jeu
+The game starts with a menu where you can choose to host or join a game.
 
-### Mouvement
-- **A / Flèche Gauche**: Se déplacer à gauche
-- **D / Flèche Droite**: Se déplacer à droite
-- **ESPACE / Flèche Haut / W**: Sauter
+### Host a Game
 
-### Combat
-- **Souris**: Viser
-- **Clic Gauche**: Tirer (cooldown entre les tirs)
+1. Run `python main.py`
+2. Press `1` to create a server
+3. Press `ENTER` to continue
+4. Enter your player name
+5. Press `ENTER`
+6. Choose your color with `LEFT` / `RIGHT`
+7. Press `ENTER` to join the lobby
+8. When all players are connected, press `SPACE` to start
 
-### Menu
-- **ENTRÉE**: Confirmer
-- **ESC**: Retours au menu
-- **← / →**: Sélectionner une couleur
+### Join a Game
 
-## Architecture Réseau
+1. Run `python main.py`
+2. Press `2` to join a server
+3. Enter the server address: `localhost`, `127.0.0.1`, or `192.168.x.x`
+4. Press `ENTER`
+5. Enter your player name
+6. Press `ENTER`
+7. Choose your color with `LEFT` / `RIGHT`
+8. Press `ENTER` to join the lobby
 
-### Architecture Client-Serveur
-- **Serveur**: Gère l'état du jeu, la physique, les collisions, les tirs
-- **Clients**: Envoient les inputs (mouvements, tirs) et reçoivent l'état du jeu
-- **Port par défaut**: 5000
-- **Protocole**: TCP avec messages JSON
+> The default server port is `5000`.
 
-### Messages Réseau
-- `join`: Rejoindre le jeu (pseudo + couleur)
-- `input`: Envoyer les mouvements du joueur
-- `shoot`: Envoyer un tir
-- `state_update`: Mise à jour de l'état du jeu
-- `game_started`: Le jeu a commencé
-- `join_success`/`join_failed`: Confirmation de connexion
+## Controls
 
-## Système de Santé
+- Move left: `A` or `LEFT ARROW`
+- Move right: `D` or `RIGHT ARROW`
+- Jump: `W`, `SPACE`, or `UP ARROW`
+- Aim: mouse cursor
+- Shoot: left mouse button
+- In menus: `ENTER` to confirm, `ESC` to go back
 
-Chaque joueur possède 4 points de vie (HP).
+## Game Rules
 
-### Dégâts des Tirs
-- **Corps**: 1 dégât par tir
-- **Tête** (zone supérieure): 4 dégâts par tir = élimination instantanée
+- Each player has 4 health points
+- Body hits deal 1 damage
+- Head hits deal 4 damage (instant elimination)
+- After taking damage, players gain temporary invincibility for a short time
 
-### Invincibilité
-Après avoir été touché, un joueur est invincible pendant 60 frames (env. 1 seconde à 60 FPS).
+## Network Details
 
-## Système de Plateformes
-
-Le jeu inclut plusieurs plateformes dont:
-- Le sol (plateforme inférieure)
-- Plateformes flottantes de différentes hauteurs
-- Limites de la map
+- Server listens on `0.0.0.0:5000`
+- Clients connect using TCP
+- Messages are sent as JSON strings
+- Supported message types: `join`, `input`, `shoot`, `chat_message`, `start_game`, `state_update`
 
 ## Configuration
 
-Les paramètres peuvent être modifiés dans `constants.py`:
-- `WIDTH`, `HEIGHT`: Dimensions de la fenêtre
-- `FPS`: Images par seconde
-- `GRAVITY`: Force de gravité
-- `PLAYER_SPEED`: Vitesse de déplacement
-- `JUMP_STRENGTH`: Force du saut
-- `BULLET_SPEED`: Vitesse des projectiles
-- `SHOOT_COOLDOWN`: Refroidissement entre les tirs (ms)
-- `MAX_HP`: Points de vie maximum
-- `DEFAULT_PORT`: Port réseau par défaut
+Configure game settings in `constants.py`:
 
-## Structure des Fichiers
+- `WIDTH`, `HEIGHT`: window size
+- `FPS`: frames per second
+- `GRAVITY`: gravity strength
+- `PLAYER_SPEED`: movement speed
+- `JUMP_STRENGTH`: jump force
+- `BULLET_SPEED`: bullet speed
+- `SHOOT_COOLDOWN`: cooldown between shots (ms)
+- `MAX_HP`: player health
+- `DEFAULT_PORT`: network port
+
+## Project Structure
 
 ```
 plateformer/
-├── main.py          # Point d'entrée, menu principal
-├── constants.py     # Configuration et constantes du jeu
-├── shared.py        # Classes partagées (Player, Bullet, GameState)
-├── server.py        # Logique du serveur
-├── client.py        # Logique du client et rendu
-├── requirements.txt # Dépendances Python
-└── Readme.md       # Ce fichier
+├── main.py          # Menu and game launcher
+├── constants.py     # Game and network configuration
+├── shared.py        # Shared classes and message objects
+├── server.py        # Server logic and physics updates
+├── client.py        # Client networking and rendering
+├── requirements.txt # Python dependencies
+├── Readme.md        # This file
+└── QUICKSTART.md    # Quick start guide
 ```
 
-## Exemple d'Utilisation
+## Common Issues
 
-**Terminal 1 - Créer un serveur:**
+- "Color taken": choose a different color, because each player must have a unique color
+- "Server full": the server already has 4 players connected
+- Connection refused: verify the server IP, port `5000`, and that the server is running
+- Local test: use `localhost` or `127.0.0.1` to connect from the same machine
+
+## Quick Start Example
+
+**Host:**
+
 ```bash
 python main.py
-# Menu -> 1. Créer un serveur
-# Choisir pseudo et couleur
 ```
 
-**Terminal 2/3/4 - Se connecter au serveur (sur la même machine ou réseau):**
+Choose `1`, then follow the prompts to host.
+
+**Clients:**
+
 ```bash
 python main.py
-# Menu -> 2. Rejoindre un serveur
-# Entrer l'IP du serveur (ou "localhost" pour la machine locale)
-# Choisir pseudo et couleur différente
 ```
 
-Une fois tous les joueurs connectés, le HOST peut appuyer sur ESPACE pour démarrer le jeu.
+Choose `2`, enter the host IP, then follow the prompts.
 
-## Troubleshooting
+## Notes
 
-### "Échec jointure: Color taken"
-La couleur que vous avez choisie est déjà utilisée. Sélectionnez une autre couleur.
+- Use a different color for each player
+- Press `ESC` to return to the menu at any time
+- The host must start the game once all players have joined
 
-### "Serveur plein!"
-Le serveur a atteint le nombre maximum de joueurs (4). Attendez qu'un joueur se déconnecte.
+## License
 
-### Impossible de se connecter
-- Vérifiez que vous utilisez la bonne adresse IP du serveur
-- Vérifiez le port par défaut (5000)
-- S'il y a un pare-feu, autorisez le port 5000
-
-## À Faire (Améliorations Futures)
-
-- [ ] Système de respawn
-- [ ] Armes spéciales
-- [ ] Power-ups
-- [ ] Effets visuels et son
-- [ ] Système de points/classement
-- [ ] Chat in-game
-- [ ] Support de plus de 4 joueurs
-- [ ] Mode de jeu personnalisé
-
-## Auteur
-
-Jeu développé avec Python et Pygame.
-
-## Licence
-
-Libre d'utilisation et de modification.
+Free to use and modify.

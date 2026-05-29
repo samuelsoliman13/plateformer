@@ -17,6 +17,7 @@ class GameClient:
         self.player_id = None
         self.my_player = None
         self.players = {}
+        self.bullets = {}
         self.platforms = []
         self.game_running = False
         self.connected = False
@@ -79,9 +80,11 @@ class GameClient:
         """Reçoit les messages du serveur"""
         buffer = ""
         try:
+            print("[CLIENT] Thread de réception démarré")
             while self.connected:
                 data = self.socket.recv(4096).decode()
                 if not data:
+                    print("[CLIENT] _receive_messages: connexion fermée par le serveur")
                     break
                 
                 buffer += data
@@ -92,12 +95,14 @@ class GameClient:
         except Exception as e:
             print(f"[CLIENT] Erreur réception: {e}")
         finally:
+            print("[CLIENT] Thread de réception terminé")
             self.connected = False
     
     def _process_server_message(self, message_str):
         """Traite un message du serveur"""
         try:
             msg = NetworkMessage.from_json(message_str)
+            print(f"[CLIENT] Reçu msg serveur: {msg.msg_type} {msg.data}")
             
             if msg.msg_type == "join_success":
                 self._handle_join_success(msg.data)
@@ -134,13 +139,16 @@ class GameClient:
 
     def _handle_game_started(self, data):
         """Affiche une notification de lancement de partie"""
+        print(f"[CLIENT] game_started reçu: {data}")
         with self.lock:
+            self.game_running = True
             self.start_notice = data.get('notice', '')
 
     def _handle_lobby_state(self, data):
         """Met à jour l'état du lobby"""
         with self.lock:
-            self.lobby_players = data.get('players', {})
+            players = data.get('players', {})
+            self.lobby_players = {int(pid): p for pid, p in players.items()}
             self.chat_messages = data.get('chat_messages', [])[-20:]
 
     def _handle_chat_message(self, data):
@@ -165,8 +173,10 @@ class GameClient:
         """Met à jour l'état du jeu"""
         state = data.get('state', {})
         with self.lock:
-            self.players = state.get('players', {})
-            self.bullets = state.get('bullets', {})
+            self.players = {int(pid): p for pid, p in state.get('players', {}).items()}
+            self.bullets = {int(bid): b for bid, b in state.get('bullets', {}).items()}
+            if self.player_id in self.players:
+                self.my_player = Player(**self.players[self.player_id])
     
     def send_input(self, vel_x, jump):
         """Envoie les inputs du joueur"""
@@ -199,13 +209,15 @@ class GameClient:
     def start_game(self):
         """Demande le démarrage du jeu"""
         if not self.connected:
+            print("[CLIENT] Tentative de start_game alors que le client n'est pas connecté")
             return
-        
+        print("[CLIENT] Envoi de la requête start_game au serveur")
         msg = NetworkMessage("start_game", {})
         try:
             self.socket.send((msg.to_json() + "\n").encode())
-        except:
-            pass
+            print("[CLIENT] Requête start_game envoyée")
+        except Exception as e:
+            print(f"[CLIENT] Erreur en envoyant start_game: {e}")
 
 class GameRenderer:
     def __init__(self, client):
@@ -216,42 +228,65 @@ class GameRenderer:
         self.font_large = pygame.font.Font(None, 36)
         self.clock = pygame.time.Clock()
         self.lobby_screen = True
+        self._game_started_logged = False
+        print("[CLIENT] Renderer initialisé, lobby_screen=True")
         
     def run(self):
         """Boucle de rendu"""
         running = True
-        
+        print("[CLIENT] Entrée dans la boucle renderer")
+
         while running and self.client.connected:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-                elif self.lobby_screen and event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_BACKSPACE:
-                        self.client.chat_input = self.client.chat_input[:-1]
-                    elif event.key == pygame.K_RETURN:
-                        if self.client.chat_input.strip():
-                            self.client.send_chat_message(self.client.chat_input)
-                            self.client.chat_input = ""
-                    elif event.unicode and event.unicode.isprintable():
-                        self.client.chat_input += event.unicode
-                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.lobby_screen:
-                    if self.client.start_button_rect and self.client.start_button_rect.collidepoint(event.pos):
-                        with self.client.lock:
-                            if self.client.player_id == 0:
-                                self.client.start_game()
-                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not self.lobby_screen:
-                    self.client.send_shoot()
-            
-            if self.lobby_screen and self.client.game_running:
-                self.lobby_screen = False
-            
-            if self.lobby_screen:
-                self._render_lobby()
-            else:
-                self._render_game()
-            
-            self.clock.tick(FPS)
-        
+            try:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        running = False
+                    elif self.lobby_screen and event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_BACKSPACE:
+                            self.client.chat_input = self.client.chat_input[:-1]
+                        elif event.key == pygame.K_RETURN:
+                            if self.client.chat_input.strip():
+                                self.client.send_chat_message(self.client.chat_input)
+                                self.client.chat_input = ""
+                        elif event.key == pygame.K_s:
+                            print("[CLIENT] Touche S pressée dans le lobby, tentative de démarrage")
+                            with self.client.lock:
+                                if self.client.player_id == 0:
+                                    self.client.start_game()
+                                    self.client.game_running = True
+                                    self.lobby_screen = False
+                        elif event.unicode and event.unicode.isprintable():
+                            self.client.chat_input += event.unicode
+                    elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.lobby_screen:
+                        print(f"[CLIENT] Clic lobby détecté à {event.pos}")
+                        if self.client.start_button_rect and self.client.start_button_rect.collidepoint(event.pos):
+                            print("[CLIENT] Bouton START cliqué")
+                            with self.client.lock:
+                                if self.client.player_id == 0:
+                                    self.client.start_game()
+                                    self.client.game_running = True
+                                    self.lobby_screen = False
+                    elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not self.lobby_screen:
+                        self.client.send_shoot()
+
+                if self.lobby_screen and self.client.game_running:
+                    self.lobby_screen = False
+
+                if self.lobby_screen:
+                    self._render_lobby()
+                else:
+                    if not self._game_started_logged:
+                        print("[CLIENT] Passage en mode jeu")
+                    self._render_game()
+
+                self.clock.tick(FPS)
+            except Exception as e:
+                import traceback
+                print(f"[CLIENT] Exception dans la boucle renderer: {e}")
+                traceback.print_exc()
+                running = False
+
+        print(f"[CLIENT] Sortie boucle renderer connected={self.client.connected} running={running} lobby_screen={self.lobby_screen} game_running={self.client.game_running}")
         pygame.quit()
     
     def _render_lobby(self):
@@ -336,73 +371,94 @@ class GameRenderer:
     
     def _render_game(self):
         """Affiche le jeu"""
-        # Gestion des inputs
-        keys = pygame.key.get_pressed()
-        vel_x = 0
-        jump = False
-        
-        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-            vel_x = -PLAYER_SPEED
-        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-            vel_x = PLAYER_SPEED
-        if keys[pygame.K_SPACE] or keys[pygame.K_UP] or keys[pygame.K_w]:
-            jump = True
-        
-        self.client.mouse_pos = pygame.mouse.get_pos()
-        
-        # Envoyer les inputs
-        self.client.send_input(vel_x, jump)
-        
-        # Rendu
-        self.screen.fill(BG_COLOR)
-        
-        # Plateformes
-        for plat in self.client.platforms:
-            pygame.draw.rect(self.screen, PLATFORM_COLOR, plat)
-        
-        # Balles
-        with self.client.lock:
-            for bullet_dict in self.client.bullets.values():
-                bullet = Bullet(**bullet_dict)
-                pygame.draw.circle(self.screen, (0, 0, 0), (int(bullet.x), int(bullet.y)), BULLET_SIZE)
+        if not self._game_started_logged:
+            print(f"[CLIENT] _render_game() appelé players={len(self.client.players)} game_running={self.client.game_running} lobby_screen={self.lobby_screen}")
+            self._game_started_logged = True
+        try:
+            # Gestion des inputs
+            keys = pygame.key.get_pressed()
+            vel_x = 0
+            jump = False
             
-            # Joueurs
-            for pid, player_dict in self.client.players.items():
-                player = Player(**player_dict)
-                if not player.alive:
-                    continue
+            if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+                vel_x = -PLAYER_SPEED
+            if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+                vel_x = PLAYER_SPEED
+            if keys[pygame.K_SPACE] or keys[pygame.K_UP] or keys[pygame.K_w]:
+                jump = True
+            
+            self.client.mouse_pos = pygame.mouse.get_pos()
+            
+            # Envoyer les inputs
+            self.client.send_input(vel_x, jump)
+            
+            # Rendu
+            self.screen.fill(BG_COLOR)
+            
+            # Plateformes
+            for plat in self.client.platforms:
+                pygame.draw.rect(self.screen, PLATFORM_COLOR, plat)
+            
+            # Balles
+            with self.client.lock:
+                for bullet_dict in self.client.bullets.values():
+                    try:
+                        bullet = Bullet(**bullet_dict)
+                        pygame.draw.circle(self.screen, (0, 0, 0), (int(bullet.x), int(bullet.y)), BULLET_SIZE)
+                    except Exception as e:
+                        print(f"[CLIENT] Erreur rendu bullet: {e}")
                 
-                color_tuple = PLAYER_COLORS.get(player.color, (128, 128, 128))
-                
-                # Tête
-                head_rect = player.get_head_rect()
-                pygame.draw.rect(self.screen, color_tuple, (player.x, player.y, PLAYER_WIDTH, HEAD_HEIGHT))
-                
-                # Corps
-                body_rect = player.get_rect()
-                pygame.draw.rect(self.screen, color_tuple, body_rect)
-                
-                # Contour si c'est notre joueur
-                with self.client.lock:
-                    is_my_player = (pid == self.client.player_id)
-                if is_my_player:
-                    pygame.draw.rect(self.screen, (255, 255, 255), (int(player.x), int(player.y), PLAYER_WIDTH, PLAYER_HEIGHT), 2)
-                
-                # Afficher les infos du joueur
-                hp_text = self.font_small.render(f"{player.name} ({player.hp}HP)", True, TEXT_COLOR)
-                self.screen.blit(hp_text, (player.x, player.y - 30))
-        
-        # Viseur à la souris
-        mx, my = pygame.mouse.get_pos()
-        pygame.draw.circle(self.screen, (255, 0, 0), (mx, my), 5, 1)
-        
-        # Afficher le cooldown de tir
-        if self.client.my_player:
-            cooldown_text = self.font_small.render(f"Tir: {'Prêt' if self.client.my_player.shoot_cooldown <= 0 else chr(int(self.client.my_player.shoot_cooldown))}",
-                                                    True, TEXT_COLOR)
-            self.screen.blit(cooldown_text, (10, 10))
-        
-        pygame.display.flip()
+                # Joueurs
+                for pid, player_dict in self.client.players.items():
+                    try:
+                        player = Player(**player_dict)
+                        if not player.alive:
+                            continue
+                        
+                        color_tuple = PLAYER_COLORS.get(player.color, (128, 128, 128))
+                        
+                        # Tête
+                        head_rect = player.get_head_rect()
+                        pygame.draw.rect(self.screen, color_tuple, (player.x, player.y, PLAYER_WIDTH, HEAD_HEIGHT))
+                        
+                        # Corps
+                        body_rect = player.get_rect()
+                        pygame.draw.rect(self.screen, color_tuple, body_rect)
+                        
+                        # Contour si c'est notre joueur
+                        is_my_player = (pid == self.client.player_id)
+                        if is_my_player:
+                            pygame.draw.rect(self.screen, (255, 255, 255), (int(player.x), int(player.y), PLAYER_WIDTH, PLAYER_HEIGHT), 2)
+                        
+                        # Afficher les infos du joueur
+                        hp_text = self.font_small.render(f"{player.name} ({player.hp}HP)", True, TEXT_COLOR)
+                        self.screen.blit(hp_text, (player.x, player.y - 30))
+                    except Exception as e:
+                        print(f"[CLIENT] Erreur rendu joueur {pid}: {e}")
+            
+            # Debug overlay
+            debug_text = self.font_small.render(
+                f"GAME ACTIVE | joueurs={len(self.client.players)} | id={self.client.player_id}", True, (255, 0, 0)
+            )
+            self.screen.blit(debug_text, (10, 10))
+
+            # Viseur à la souris
+            mx, my = pygame.mouse.get_pos()
+            pygame.draw.circle(self.screen, (255, 0, 0), (mx, my), 5, 1)
+            
+            # Afficher le cooldown de tir
+            if self.client.my_player:
+                cooldown_text = self.font_small.render(
+                    f"Tir: {'Prêt' if self.client.my_player.shoot_cooldown <= 0 else str(self.client.my_player.shoot_cooldown)}",
+                    True, TEXT_COLOR)
+                self.screen.blit(cooldown_text, (10, 40))
+            
+            pygame.display.flip()
+        except Exception as e:
+            import traceback
+            print(f"[CLIENT] ERREUR DANS _render_game(): {e}")
+            traceback.print_exc()
+            raise
 
 def run_game(server_host, server_port, player_name, player_color):
     """Fonction utilitaire pour lancer le jeu client"""
@@ -430,3 +486,159 @@ def run_game(server_host, server_port, player_name, player_color):
     
     renderer = GameRenderer(client)
     renderer.run()
+
+
+def _create_local_platforms():
+    return [
+        pygame.Rect(0, HEIGHT - 20, WIDTH, 20),
+        pygame.Rect(150, HEIGHT - 150, 250, 20),
+        pygame.Rect(500, HEIGHT - 250, 250, 20),
+        pygame.Rect(300, HEIGHT - 350, 200, 20),
+        pygame.Rect(700, HEIGHT - 200, 200, 20),
+    ]
+
+
+class SoloGame:
+    def __init__(self, player_name, player_color):
+        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+        pygame.display.set_caption("Platformer Solo")
+        self.font_small = pygame.font.Font(None, 24)
+        self.clock = pygame.time.Clock()
+        self.player = Player(
+            player_id=0,
+            name=player_name,
+            color=player_color,
+            x=50.0,
+            y=HEIGHT - 200,
+        )
+        self.players = {0: self.player}
+        self.bullets = {}
+        self.platforms = _create_local_platforms()
+        self.running = True
+        self.mouse_pos = (0, 0)
+        self.next_bullet_id = 0
+
+    def run(self):
+        while self.running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.running = False
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    self._shoot()
+            keys = pygame.key.get_pressed()
+            vel_x = 0
+            jump = False
+            if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+                vel_x = -PLAYER_SPEED
+            if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+                vel_x = PLAYER_SPEED
+            if keys[pygame.K_SPACE] or keys[pygame.K_UP] or keys[pygame.K_w]:
+                jump = True
+                if self._is_on_ground():
+                    self.player.vel_y = -JUMP_STRENGTH
+            self.player.vel_x = vel_x
+            self.mouse_pos = pygame.mouse.get_pos()
+            self._update_state()
+            self._render()
+            self.clock.tick(FPS)
+        pygame.quit()
+
+    def _is_on_ground(self):
+        rect = self.player.get_rect()
+        rect.y += GROUND_CHECK_OFFSET
+        for plat in self.platforms:
+            if rect.colliderect(plat):
+                return True
+        return False
+
+    def _shoot(self):
+        if self.player.shoot_cooldown > 0 or not self.player.alive:
+            return
+        bullet_x = self.player.x + PLAYER_WIDTH // 2
+        bullet_y = self.player.y + PLAYER_HEIGHT // 2
+        mx, my = self.mouse_pos
+        dx = mx - bullet_x
+        dy = my - bullet_y
+        dist = math.sqrt(dx * dx + dy * dy)
+        if dist > 0:
+            dx /= dist
+            dy /= dist
+        bullet = Bullet(
+            bullet_id=self.next_bullet_id,
+            owner_id=0,
+            x=bullet_x,
+            y=bullet_y,
+            vel_x=dx * BULLET_SPEED,
+            vel_y=dy * BULLET_SPEED,
+        )
+        self.next_bullet_id += 1
+        self.bullets[bullet.bullet_id] = bullet
+        self.player.shoot_cooldown = SHOOT_COOLDOWN // (1000 // FPS)
+
+    def _update_state(self):
+        p = self.player
+        if not p.alive:
+            return
+        p.vel_y += GRAVITY
+        p.x += p.vel_x
+        rect = p.get_full_rect()
+        for plat in self.platforms:
+            if rect.colliderect(plat):
+                if p.vel_x > 0:
+                    p.x = plat.left - PLAYER_WIDTH
+                elif p.vel_x < 0:
+                    p.x = plat.right
+        p.y += p.vel_y
+        rect = p.get_full_rect()
+        for plat in self.platforms:
+            if rect.colliderect(plat):
+                if p.vel_y > 0:
+                    p.y = plat.top - PLAYER_HEIGHT
+                    p.vel_y = 0
+                elif p.vel_y < 0:
+                    p.y = plat.bottom
+                    p.vel_y = 0
+        if p.x < 0:
+            p.x = 0
+        if p.x + PLAYER_WIDTH > WIDTH:
+            p.x = WIDTH - PLAYER_WIDTH
+        if p.y > HEIGHT:
+            p.alive = False
+        if p.shoot_cooldown > 0:
+            p.shoot_cooldown -= 1
+        if p.invincibility_frames > 0:
+            p.invincibility_frames -= 1
+        bullets_to_remove = []
+        for bullet_id, bullet in list(self.bullets.items()):
+            bullet.x += bullet.vel_x
+            bullet.y += bullet.vel_y
+            bullet.age += 1
+            if bullet.x < 0 or bullet.x > WIDTH or bullet.y < 0 or bullet.y > HEIGHT or bullet.age > 300:
+                bullets_to_remove.append(bullet_id)
+        for bid in bullets_to_remove:
+            self.bullets.pop(bid, None)
+
+    def _render(self):
+        self.screen.fill(BG_COLOR)
+        for plat in self.platforms:
+            pygame.draw.rect(self.screen, PLATFORM_COLOR, plat)
+        for bullet in self.bullets.values():
+            pygame.draw.circle(self.screen, (0, 0, 0), (int(bullet.x), int(bullet.y)), BULLET_SIZE)
+        if self.player.alive:
+            color_tuple = PLAYER_COLORS.get(self.player.color, (128, 128, 128))
+            pygame.draw.rect(self.screen, color_tuple, (self.player.x, self.player.y, PLAYER_WIDTH, HEAD_HEIGHT))
+            pygame.draw.rect(self.screen, color_tuple, self.player.get_rect())
+            hp_text = self.font_small.render(f"{self.player.name} ({self.player.hp}HP)", True, TEXT_COLOR)
+            self.screen.blit(hp_text, (self.player.x, self.player.y - 30))
+        mx, my = pygame.mouse.get_pos()
+        pygame.draw.circle(self.screen, (255, 0, 0), (mx, my), 5, 1)
+        cooldown_text = self.font_small.render(
+            f"Tir: {'Prêt' if self.player.shoot_cooldown <= 0 else str(self.player.shoot_cooldown)}", True, TEXT_COLOR)
+        self.screen.blit(cooldown_text, (10, 10))
+        pygame.display.flip()
+
+
+def run_local_solo(player_name, player_color):
+    pygame.init()
+    solo = SoloGame(player_name, player_color)
+    solo.run()

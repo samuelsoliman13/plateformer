@@ -113,6 +113,7 @@ class GameServer:
         """Traite un message d'un client"""
         try:
             msg = NetworkMessage.from_json(message_str)
+            print(f"[SERVEUR] Reçu msg {msg.msg_type} de client {client_id}: {msg.data}")
             
             if msg.msg_type == "join":
                 self._handle_join(client_id, msg.data)
@@ -257,18 +258,23 @@ class GameServer:
                 pass
 
     def _handle_start_game(self, client_id=None):
-        """Envoie un message de début de partie sans lancer le jeu réel"""
+        """Démarre le jeu et notifie tous les clients"""
         with self.lock:
             if client_id is not None and client_id != 0:
+                print(f"[SERVEUR] start_game ignoré depuis le client {client_id}")
                 return
+            print(f"[SERVEUR] start_game reçu du host {client_id}")
+            self.game_running = True
             msg = NetworkMessage("game_started", {
-                'notice': "La partie va commencer - rien ne va se passer, le jeu est en cours de développement"
+                'notice': "La partie commence !"
             })
             for client_info in self.clients.values():
                 try:
                     client_info['socket'].send((msg.to_json() + "\n").encode())
-                except:
-                    pass
+                except Exception as e:
+                    print(f"[SERVEUR] Erreur en envoyant game_started: {e}")
+            self._broadcast_game_state()
+            print("[SERVEUR] game_started envoyé et état de jeu diffusé")
     
     def _is_on_ground(self, player):
         """Vérifie si un joueur est au sol"""

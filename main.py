@@ -3,7 +3,7 @@ import threading
 import sys
 from constants import *
 from server import run_server
-from client import run_game
+from client import run_game, run_local_solo
 
 class MenuUI:
     def __init__(self):
@@ -63,6 +63,9 @@ class MenuUI:
                 self.state = "create_server"
             elif event.key == pygame.K_2:
                 self.state = "join_server"
+            elif event.key == pygame.K_3:
+                # Mode solo rapide
+                self._start_solo()
         
         elif self.state == "create_server":
             if event.key == pygame.K_RETURN:
@@ -104,12 +107,16 @@ class MenuUI:
         # Boutons
         option1 = self.font_button.render("1. Créer un serveur (HOST)", True, TEXT_COLOR)
         option2 = self.font_button.render("2. Rejoindre un serveur (CLIENT)", True, TEXT_COLOR)
+        option3 = self.font_button.render("3. Solo (Jouer seul)", True, TEXT_COLOR)
         
         self.screen.blit(option1, (50, 200))
         self.screen.blit(option2, (50, 300))
+        self.screen.blit(option3, (50, 400))
         
         # Instructions
         instr = self.font_small.render("Tapez 1 ou 2 pour continuer", True, (100, 100, 100))
+        self.screen.blit(instr, (WIDTH // 2 - instr.get_width() // 2, HEIGHT - 100))
+        instr = self.font_small.render("Tapez 1, 2 ou 3 pour continuer", True, (100, 100, 100))
         self.screen.blit(instr, (WIDTH // 2 - instr.get_width() // 2, HEIGHT - 100))
         
         pygame.display.flip()
@@ -240,9 +247,42 @@ class MenuUI:
                 print(f"Erreur: {e}")
                 self.state = "main_menu"
 
+    def _start_solo(self):
+        """Démarre un mode solo local pour tester les mécaniques."""
+        print("Démarrage du mode solo local...")
+        try:
+            color = self.colors_list[self.selected_color_idx]
+        except Exception:
+            color = list(PLAYER_COLORS.keys())[0]
+
+        name = "Solo"
+        try:
+            run_local_solo(name, color)
+        except Exception as e:
+            print(f"Erreur en mode solo local: {e}")
+        finally:
+            pygame.quit()
+            sys.exit(0)
+
 def main():
     menu = MenuUI()
     menu.run()
+
+    
+def run_solo_from_menu(name="Solo", color=None):
+    """Utility to start a server and run a single client for quick solo testing."""
+    # This function is defined for potential external use; MenuUI._start_solo calls same logic.
+    server_thread = threading.Thread(target=lambda: run_server(DEFAULT_PORT), daemon=True)
+    server_thread.start()
+    import time
+    time.sleep(1)
+    # Choose default color if not provided
+    if color is None:
+        try:
+            color = list(PLAYER_COLORS.keys())[0]
+        except Exception:
+            color = "Red"
+    run_game("localhost", DEFAULT_PORT, name, color)
 
 if __name__ == "__main__":
     main()
