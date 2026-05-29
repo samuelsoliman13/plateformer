@@ -18,6 +18,7 @@ class GameServer:
         self.clients = {}  # {client_id: {'socket': socket, 'player': Player}}
         self.players = {}  # {player_id: Player}
         self.bullets = {}  # {bullet_id: Bullet}
+        self.chat_messages = []  # Liste des messages du lobby
         self.next_client_id = 0
         self.next_bullet_id = 0
         self.game_running = False
@@ -106,6 +107,7 @@ class GameServer:
                             del self.players[player_id]
                     del self.clients[client_id]
                     print(f"[SERVEUR] Client {client_id} déconnecté")
+                    self._broadcast_lobby_state()
     
     def _process_message(self, client_id, message_str):
         """Traite un message d'un client"""
@@ -118,8 +120,10 @@ class GameServer:
                 self._handle_input(client_id, msg.data)
             elif msg.msg_type == "shoot":
                 self._handle_shoot(client_id, msg.data)
+            elif msg.msg_type == "chat_message":
+                self._handle_chat_message(client_id, msg.data)
             elif msg.msg_type == "start_game":
-                self._handle_start_game()
+                self._handle_start_game(client_id)
         except Exception as e:
             print(f"[SERVEUR] Erreur traitement message: {e}")
     
@@ -157,6 +161,7 @@ class GameServer:
             self.clients[client_id]['socket'].send((msg.to_json() + "\n").encode())
             
             print(f"[SERVEUR] Joueur {name} ({color}) rejoint (ID: {client_id})")
+            self._broadcast_lobby_state()
     
     def _handle_input(self, client_id, data):
         """Traite l'input d'un joueur"""
@@ -206,11 +211,59 @@ class GameServer:
             self.bullets[bullet.bullet_id] = bullet
             player.shoot_cooldown = SHOOT_COOLDOWN // (1000 // FPS)  # Convertir en frames
     
-    def _handle_start_game(self):
-        """Démarre le jeu"""
+    def _handle_chat_message(self, client_id, data):
+        """Traite un message de chat du lobby"""
+        text = data.get('text', '').strip()
+        if not text:
+            return
         with self.lock:
-            self.game_running = True
-            msg = NetworkMessage("game_started", {})
+            client_info = self.clients.get(client_id)
+            if not client_info or not client_info['player']:
+                return
+            sender = client_info['player'].name
+            color = client_info['player'].color
+            chat_message = {
+                'sender': sender,
+                'color': color,
+                'text': text
+            }
+            self.chat_messages.append(chat_message)
+            self.chat_messages = self.chat_messages[-20:]
+            self._broadcast_chat_message(chat_message)
+
+    def _broadcast_chat_message(self, chat_message):
+        msg = NetworkMessage("chat_message", {
+            'message': chat_message
+        })
+        serialized = msg.to_json() + "\n"
+        for client_info in self.clients.values():
+            try:
+                client_info['socket'].send(serialized.encode())
+            except:
+                pass
+
+    def _broadcast_lobby_state(self):
+        """Envoie l'état du lobby à tous les clients"""
+        lobby_state = {
+            'players': {pid: p.to_dict() for pid, p in self.players.items()},
+            'chat_messages': self.chat_messages
+        }
+        msg = NetworkMessage("lobby_state", lobby_state)
+        serialized = msg.to_json() + "\n"
+        for client_info in self.clients.values():
+            try:
+                client_info['socket'].send(serialized.encode())
+            except:
+                pass
+
+    def _handle_start_game(self, client_id=None):
+        """Envoie un message de début de partie sans lancer le jeu réel"""
+        with self.lock:
+            if client_id is not None and client_id != 0:
+                return
+            msg = NetworkMessage("game_started", {
+                'notice': "La partie va commencer - rien ne va se passer, le jeu est en cours de développement"
+            })
             for client_info in self.clients.values():
                 try:
                     client_info['socket'].send((msg.to_json() + "\n").encode())

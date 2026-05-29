@@ -17,10 +17,14 @@ class GameClient:
         self.player_id = None
         self.my_player = None
         self.players = {}
-        self.bullets = {}
         self.platforms = []
         self.game_running = False
         self.connected = False
+        self.lobby_players = {}
+        self.chat_messages = []
+        self.chat_input = ""
+        self.start_notice = ""
+        self.start_button_rect = None
         
         self.lock = threading.Lock()
         
@@ -101,10 +105,13 @@ class GameClient:
                 print(f"[CLIENT] Échec jointure: {msg.data.get('reason')}")
                 self.connected = False
             elif msg.msg_type == "game_started":
-                with self.lock:
-                    self.game_running = True
+                self._handle_game_started(msg.data)
             elif msg.msg_type == "state_update":
                 self._handle_state_update(msg.data)
+            elif msg.msg_type == "lobby_state":
+                self._handle_lobby_state(msg.data)
+            elif msg.msg_type == "chat_message":
+                self._handle_chat_message(msg.data)
             elif msg.msg_type == "server_full":
                 print("[CLIENT] Serveur plein!")
                 self.connected = False
@@ -124,6 +131,35 @@ class GameClient:
                 self.platforms.append(pygame.Rect(plat_data[0], plat_data[1], plat_data[2], plat_data[3]))
         
         print(f"[CLIENT] Jointure réussie! ID: {self.player_id}")
+
+    def _handle_game_started(self, data):
+        """Affiche une notification de lancement de partie"""
+        with self.lock:
+            self.start_notice = data.get('notice', '')
+
+    def _handle_lobby_state(self, data):
+        """Met à jour l'état du lobby"""
+        with self.lock:
+            self.lobby_players = data.get('players', {})
+            self.chat_messages = data.get('chat_messages', [])[-20:]
+
+    def _handle_chat_message(self, data):
+        """Ajoute un message de chat reçu"""
+        message = data.get('message')
+        if not message:
+            return
+        with self.lock:
+            self.chat_messages.append(message)
+            self.chat_messages = self.chat_messages[-20:]
+
+    def send_chat_message(self, text):
+        if not self.connected or not text.strip():
+            return
+        msg = NetworkMessage("chat_message", {'text': text.strip()})
+        try:
+            self.socket.send((msg.to_json() + "\n").encode())
+        except:
+            pass
     
     def _handle_state_update(self, data):
         """Met à jour l'état du jeu"""
@@ -189,11 +225,21 @@ class GameRenderer:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
-                elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE and self.lobby_screen:
-                    # Démarrer le jeu
-                    self.client.start_game()
-                    self.lobby_screen = False
-                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                elif self.lobby_screen and event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_BACKSPACE:
+                        self.client.chat_input = self.client.chat_input[:-1]
+                    elif event.key == pygame.K_RETURN:
+                        if self.client.chat_input.strip():
+                            self.client.send_chat_message(self.client.chat_input)
+                            self.client.chat_input = ""
+                    elif event.unicode and event.unicode.isprintable():
+                        self.client.chat_input += event.unicode
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.lobby_screen:
+                    if self.client.start_button_rect and self.client.start_button_rect.collidepoint(event.pos):
+                        with self.client.lock:
+                            if self.client.player_id == 0:
+                                self.client.start_game()
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not self.lobby_screen:
                     self.client.send_shoot()
             
             if self.lobby_screen and self.client.game_running:
@@ -213,35 +259,79 @@ class GameRenderer:
         self.screen.fill(UI_BG_COLOR)
         
         # Titre
-        title = self.font_large.render("En attente des joueurs...", True, TEXT_COLOR)
-        self.screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 50))
+        title = self.font_large.render("Lobby de jeu", True, TEXT_COLOR)
+        self.screen.blit(title, (50, 30))
         
-        # Afficher les joueurs connectés
+        # Panel des joueurs
+        panel_rect = pygame.Rect(50, 100, 400, 500)
+        pygame.draw.rect(self.screen, (240, 240, 240), panel_rect)
+        pygame.draw.rect(self.screen, TEXT_COLOR, panel_rect, 2)
+        players_title = self.font_small.render("Joueurs connectés", True, TEXT_COLOR)
+        self.screen.blit(players_title, (60, 110))
+        
         y = 150
         with self.client.lock:
-            for pid, player_dict in self.client.players.items():
+            lobby_players = self.client.lobby_players or self.client.players
+            for pid, player_dict in lobby_players.items():
                 player_name = player_dict['name']
                 player_color_str = player_dict['color']
                 color_tuple = PLAYER_COLORS.get(player_color_str, (128, 128, 128))
-                
-                # Carré de couleur
-                pygame.draw.rect(self.screen, color_tuple, (100, y, 30, 30))
-                
-                # Nom du joueur
+                pygame.draw.rect(self.screen, color_tuple, (70, y, 30, 30))
                 text = self.font_small.render(f"{player_name} ({player_color_str})", True, TEXT_COLOR)
-                self.screen.blit(text, (150, y + 5))
-                
-                y += 50
+                self.screen.blit(text, (110, y + 5))
+                y += 45
+                if y > panel_rect.bottom - 40:
+                    break
         
-        # Instructions
+        # Panel chat
+        chat_rect = pygame.Rect(500, 100, 440, 470)
+        pygame.draw.rect(self.screen, (240, 240, 240), chat_rect)
+        pygame.draw.rect(self.screen, TEXT_COLOR, chat_rect, 2)
+        chat_title = self.font_small.render("Chat du lobby", True, TEXT_COLOR)
+        self.screen.blit(chat_title, (510, 110))
+        
+        with self.client.lock:
+            messages = list(self.client.chat_messages)[-12:]
+        chat_y = 150
+        for msg in messages:
+            color_tuple = PLAYER_COLORS.get(msg.get('color', ''), (100, 100, 100))
+            sender_text = self.font_small.render(f"{msg.get('sender')}: ", True, color_tuple)
+            self.screen.blit(sender_text, (520, chat_y))
+            message_text = self.font_small.render(msg.get('text', ''), True, TEXT_COLOR)
+            self.screen.blit(message_text, (520 + sender_text.get_width(), chat_y))
+            chat_y += 30
+            if chat_y > chat_rect.bottom - 60:
+                break
+        
+        input_rect = pygame.Rect(500, 590, 440, 40)
+        pygame.draw.rect(self.screen, (255, 255, 255), input_rect)
+        pygame.draw.rect(self.screen, TEXT_COLOR, input_rect, 2)
+        input_text = self.font_small.render(self.client.chat_input or "Tapez un message...", True, TEXT_COLOR)
+        self.screen.blit(input_text, (510, 600))
+        
         with self.client.lock:
             is_host = self.client.player_id == 0
-        if is_host:  # Premier joeur (host)
-            instr = self.font_small.render("ESPACE pour démarrer le jeu", True, (0, 100, 0))
+            start_notice = self.client.start_notice
+        if is_host:
+            button_color = (0, 120, 0)
+            self.client.start_button_rect = pygame.Rect(60, HEIGHT - 160, 260, 50)
+            pygame.draw.rect(self.screen, button_color, self.client.start_button_rect)
+            pygame.draw.rect(self.screen, TEXT_COLOR, self.client.start_button_rect, 2)
+            button_text = self.font_small.render("START (host seulement)", True, (255, 255, 255))
+            self.screen.blit(button_text, (self.client.start_button_rect.x + 10, self.client.start_button_rect.y + 14))
+            instr = self.font_small.render("Cliquez sur START pour envoyer l'annonce de démarrage.", True, TEXT_COLOR)
         else:
+            self.client.start_button_rect = None
             instr = self.font_small.render("En attente du host...", True, TEXT_COLOR)
         self.screen.blit(instr, (WIDTH // 2 - instr.get_width() // 2, HEIGHT - 100))
-        
+
+        if start_notice:
+            notice_rect = pygame.Rect(500, HEIGHT - 160, 440, 80)
+            pygame.draw.rect(self.screen, (255, 230, 230), notice_rect)
+            pygame.draw.rect(self.screen, TEXT_COLOR, notice_rect, 2)
+            notice_text = self.font_small.render(start_notice, True, (120, 0, 0))
+            self.screen.blit(notice_text, (notice_rect.x + 10, notice_rect.y + 10))
+
         pygame.display.flip()
     
     def _render_game(self):
