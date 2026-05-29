@@ -16,6 +16,8 @@ class Player:
     vel_y: float = 0
     hp: int = MAX_HP
     alive: bool = True
+    score: int = 0
+    respawn_timer: int = 0
     shooting: bool = False
     shoot_cooldown: int = 0
     invincibility_frames: int = 0

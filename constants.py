@@ -19,6 +19,14 @@ BULLET_DAMAGE_BODY = 1
 BULLET_DAMAGE_HEAD = 4
 MAX_HP = 4
 
+# Score
+KILL_SCORE = 100
+HEADSHOT_SCORE = 25
+WIN_SCORE = 1000
+
+# Respawn
+RESPAWN_DELAY = 3 * FPS
+
 # Durée d'invincibilité après tir sur la tête
 INVINCIBILITY_FRAMES = 60
 

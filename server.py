@@ -257,13 +257,60 @@ class GameServer:
             except:
                 pass
 
+    def _get_spawn_position(self, player_id):
+        x = 50.0 + (player_id % self.max_players) * 150
+        y = HEIGHT - 200
+        return x, y
+
+    def _reset_match(self):
+        """Réinitialise l'état des joueurs pour une nouvelle manche."""
+        self.bullets.clear()
+        for player_id, player in self.players.items():
+            player.hp = MAX_HP
+            player.alive = True
+            player.vel_x = 0
+            player.vel_y = 0
+            player.respawn_timer = 0
+            player.invincibility_frames = 0
+            player.score = 0
+            player.x, player.y = self._get_spawn_position(player_id)
+
+    def _respawn_player(self, player):
+        player.hp = MAX_HP
+        player.alive = True
+        player.vel_x = 0
+        player.vel_y = 0
+        player.invincibility_frames = 0
+        player.respawn_timer = 0
+        player.x, player.y = self._get_spawn_position(player.player_id)
+
+    def _broadcast_game_over(self, winner):
+        self.game_running = False
+        msg = NetworkMessage("game_over", {
+            'winner_id': winner.player_id,
+            'winner_name': winner.name
+        })
+        serialized = msg.to_json() + "\n"
+        for client_info in self.clients.values():
+            try:
+                client_info['socket'].send(serialized.encode())
+            except:
+                pass
+        self._broadcast_lobby_state()
+        self._broadcast_game_state()
+        print(f"[SERVEUR] Partie terminée : {winner.name} a gagné")
+
     def _handle_start_game(self, client_id=None):
         """Démarre le jeu et notifie tous les clients"""
         with self.lock:
             if client_id is not None and client_id != 0:
                 print(f"[SERVEUR] start_game ignoré depuis le client {client_id}")
                 return
+            if not self.players:
+                print("[SERVEUR] Aucun joueur présent pour démarrer la partie")
+                return
             print(f"[SERVEUR] start_game reçu du host {client_id}")
+            self._reset_match()
             self.game_running = True
             msg = NetworkMessage("game_started", {
                 'notice': "La partie commence !"
@@ -305,6 +352,10 @@ class GameServer:
         # Mise à jour des joueurs
         for player in self.players.values():
             if not player.alive:
+                if player.respawn_timer > 0:
+                    player.respawn_timer -= 1
+                    if player.respawn_timer <= 0:
+                        self._respawn_player(player)
                 continue
             
             # Physique
@@ -339,6 +390,7 @@ class GameServer:
                 player.x = WIDTH - PLAYER_WIDTH
             if player.y > HEIGHT:
                 player.alive = False
+                player.respawn_timer = RESPAWN_DELAY
             
             # Refroidissement des tirs
             if player.shoot_cooldown > 0:
@@ -366,17 +418,25 @@ class GameServer:
             for player in self.players.values():
                 if bullet.owner_id == player.player_id or not player.alive:
                     continue
+                if player.invincibility_frames > 0:
+                    continue
                 
                 head_rect = player.get_head_rect()
                 body_rect = player.get_rect()
                 bullet_rect = bullet.get_rect()
+                shooter = self.players.get(bullet.owner_id)
                 
                 if bullet_rect.colliderect(head_rect):
                     # Coup à la tête
                     player.hp -= BULLET_DAMAGE_HEAD
+                    if shooter:
+                        shooter.score += HEADSHOT_SCORE
                     bullets_to_remove.append(bullet_id)
                     if player.hp <= 0:
                         player.alive = False
+                        player.respawn_timer = RESPAWN_DELAY
+                        if shooter:
+                            shooter.score += KILL_SCORE
                     player.invincibility_frames = INVINCIBILITY_FRAMES
                     break
                 elif bullet_rect.colliderect(body_rect):
@@ -385,12 +445,20 @@ class GameServer:
                     bullets_to_remove.append(bullet_id)
                     if player.hp <= 0:
                         player.alive = False
+                        player.respawn_timer = RESPAWN_DELAY
+                        if shooter:
+                            shooter.score += KILL_SCORE
                     player.invincibility_frames = INVINCIBILITY_FRAMES
                     break
         
         for bid in bullets_to_remove:
             if bid in self.bullets:
                 del self.bullets[bid]
+
+        for player in self.players.values():
+            if player.score >= WIN_SCORE:
+                self._broadcast_game_over(player)
+                return
     
     def _broadcast_game_state(self):
         """Envoie l'état du jeu à tous les clients"""

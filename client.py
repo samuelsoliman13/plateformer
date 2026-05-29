@@ -26,6 +26,8 @@ class GameClient:
         self.chat_input = ""
         self.start_notice = ""
         self.start_button_rect = None
+        self.game_over = False
+        self.winner_message = ""
         
         self.lock = threading.Lock()
         
@@ -117,6 +119,8 @@ class GameClient:
                 self._handle_lobby_state(msg.data)
             elif msg.msg_type == "chat_message":
                 self._handle_chat_message(msg.data)
+            elif msg.msg_type == "game_over":
+                self._handle_game_over(msg.data)
             elif msg.msg_type == "server_full":
                 print("[CLIENT] Serveur plein!")
                 self.connected = False
@@ -143,6 +147,18 @@ class GameClient:
         with self.lock:
             self.game_running = True
             self.start_notice = data.get('notice', '')
+            self.game_over = False
+            self.winner_message = ""
+
+    def _handle_game_over(self, data):
+        print(f"[CLIENT] game_over reçu: {data}")
+        with self.lock:
+            self.game_running = False
+            self.lobby_players = self.lobby_players or self.players
+            self.game_over = True
+            self.winner_message = f"Victoire de {data.get('winner_name', 'un joueur')} !"
+            self.start_notice = ""
+            self.lobby_screen = True
 
     def _handle_lobby_state(self, data):
         """Met à jour l'état du lobby"""
@@ -248,8 +264,8 @@ class GameRenderer:
                             if self.client.chat_input.strip():
                                 self.client.send_chat_message(self.client.chat_input)
                                 self.client.chat_input = ""
-                        elif event.key == pygame.K_s:
-                            print("[CLIENT] Touche S pressée dans le lobby, tentative de démarrage")
+                        elif (event.key == pygame.K_s or event.key == pygame.K_SPACE) and not self.client.chat_input:
+                            print("[CLIENT] Touche de démarrage pressée dans le lobby, tentative de démarrage")
                             with self.client.lock:
                                 if self.client.player_id == 0:
                                     self.client.start_game()
@@ -268,6 +284,9 @@ class GameRenderer:
                                     self.lobby_screen = False
                     elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not self.lobby_screen:
                         self.client.send_shoot()
+
+                if self.client.game_over:
+                    self.lobby_screen = True
 
                 if self.lobby_screen and self.client.game_running:
                     self.lobby_screen = False
@@ -312,7 +331,9 @@ class GameRenderer:
                 player_color_str = player_dict['color']
                 color_tuple = PLAYER_COLORS.get(player_color_str, (128, 128, 128))
                 pygame.draw.rect(self.screen, color_tuple, (70, y, 30, 30))
-                text = self.font_small.render(f"{player_name} ({player_color_str})", True, TEXT_COLOR)
+                score = player_dict.get('score', 0)
+                status = f"{player_name} ({player_color_str}) - {score} pts"
+                text = self.font_small.render(status, True, TEXT_COLOR)
                 self.screen.blit(text, (110, y + 5))
                 y += 45
                 if y > panel_rect.bottom - 40:
@@ -354,14 +375,21 @@ class GameRenderer:
             pygame.draw.rect(self.screen, TEXT_COLOR, self.client.start_button_rect, 2)
             button_text = self.font_small.render("START (host seulement)", True, (255, 255, 255))
             self.screen.blit(button_text, (self.client.start_button_rect.x + 10, self.client.start_button_rect.y + 14))
-            instr = self.font_small.render("Cliquez sur START pour envoyer l'annonce de démarrage.", True, TEXT_COLOR)
+            instr = self.font_small.render("Cliquez sur START ou appuyez sur SPACE/S pour démarrer.", True, TEXT_COLOR)
         else:
             self.client.start_button_rect = None
             instr = self.font_small.render("En attente du host...", True, TEXT_COLOR)
         self.screen.blit(instr, (WIDTH // 2 - instr.get_width() // 2, HEIGHT - 100))
 
+        if self.client.game_over and self.client.winner_message:
+            winner_rect = pygame.Rect(500, HEIGHT - 160, 440, 80)
+            pygame.draw.rect(self.screen, (230, 255, 230), winner_rect)
+            pygame.draw.rect(self.screen, TEXT_COLOR, winner_rect, 2)
+            winner_text = self.font_small.render(self.client.winner_message, True, (0, 120, 0))
+            self.screen.blit(winner_text, (winner_rect.x + 10, winner_rect.y + 10))
+
         if start_notice:
-            notice_rect = pygame.Rect(500, HEIGHT - 160, 440, 80)
+            notice_rect = pygame.Rect(500, HEIGHT - 260, 440, 80)
             pygame.draw.rect(self.screen, (255, 230, 230), notice_rect)
             pygame.draw.rect(self.screen, TEXT_COLOR, notice_rect, 2)
             notice_text = self.font_small.render(start_notice, True, (120, 0, 0))
@@ -400,6 +428,7 @@ class GameRenderer:
                 pygame.draw.rect(self.screen, PLATFORM_COLOR, plat)
             
             # Balles
+            all_players = []
             with self.client.lock:
                 for bullet_dict in self.client.bullets.values():
                     try:
@@ -412,18 +441,22 @@ class GameRenderer:
                 for pid, player_dict in self.client.players.items():
                     try:
                         player = Player(**player_dict)
+                        all_players.append(player)
                         if not player.alive:
                             continue
                         
                         color_tuple = PLAYER_COLORS.get(player.color, (128, 128, 128))
+                        head_color = tuple(min(255, c + 80) for c in color_tuple)
                         
                         # Tête
                         head_rect = player.get_head_rect()
-                        pygame.draw.rect(self.screen, color_tuple, (player.x, player.y, PLAYER_WIDTH, HEAD_HEIGHT))
+                        pygame.draw.rect(self.screen, head_color, head_rect)
+                        pygame.draw.rect(self.screen, (0, 0, 0), head_rect, 1)
                         
                         # Corps
                         body_rect = player.get_rect()
                         pygame.draw.rect(self.screen, color_tuple, body_rect)
+                        pygame.draw.rect(self.screen, (0, 0, 0), body_rect, 1)
                         
                         # Contour si c'est notre joueur
                         is_my_player = (pid == self.client.player_id)
@@ -431,28 +464,38 @@ class GameRenderer:
                             pygame.draw.rect(self.screen, (255, 255, 255), (int(player.x), int(player.y), PLAYER_WIDTH, PLAYER_HEIGHT), 2)
                         
                         # Afficher les infos du joueur
-                        hp_text = self.font_small.render(f"{player.name} ({player.hp}HP)", True, TEXT_COLOR)
+                        hp_text = self.font_small.render(f"{player.name} ({player.hp}HP) - {player.score} pts", True, TEXT_COLOR)
                         self.screen.blit(hp_text, (player.x, player.y - 30))
                     except Exception as e:
                         print(f"[CLIENT] Erreur rendu joueur {pid}: {e}")
-            
+
+                # Affichage du tableau des scores et des respawns
+                score_y = 50
+                for player in all_players:
+                    status = f"{player.name}: {player.score} pts"
+                    if not player.alive:
+                        seconds = max(0, player.respawn_timer // FPS)
+                        status += f" - Respawn dans {seconds}s"
+                    score_text = self.font_small.render(status, True, TEXT_COLOR)
+                    self.screen.blit(score_text, (10, score_y))
+                    score_y += 20
+
             # Debug overlay
             debug_text = self.font_small.render(
                 f"GAME ACTIVE | joueurs={len(self.client.players)} | id={self.client.player_id}", True, (255, 0, 0)
             )
             self.screen.blit(debug_text, (10, 10))
 
-            # Viseur à la souris
             mx, my = pygame.mouse.get_pos()
             pygame.draw.circle(self.screen, (255, 0, 0), (mx, my), 5, 1)
-            
+
             # Afficher le cooldown de tir
             if self.client.my_player:
                 cooldown_text = self.font_small.render(
                     f"Tir: {'Prêt' if self.client.my_player.shoot_cooldown <= 0 else str(self.client.my_player.shoot_cooldown)}",
                     True, TEXT_COLOR)
-                self.screen.blit(cooldown_text, (10, 40))
-            
+                self.screen.blit(cooldown_text, (10, score_y + 10))
+
             pygame.display.flip()
         except Exception as e:
             import traceback
